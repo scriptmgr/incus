@@ -574,7 +574,9 @@ __reload_simplestreams() {
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 __cleanup() {
-  [ -n "${BUILD_WORK_DIR:-}" ] && [ -d "${BUILD_WORK_DIR}" ] && rm -rf "${BUILD_WORK_DIR}"
+  if [ -n "${BUILD_WORK_DIR:-}" ] && [ -d "${BUILD_WORK_DIR}" ]; then
+    rm -rf "${BUILD_WORK_DIR}"
+  fi
 }
 trap '__cleanup' EXIT ERR
 # - - - - - - - - - - - - - - - - - - - - - - - - -
