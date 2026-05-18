@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-##@Version           :  202605172147-git
+##@Version           :  202605172316-git
 # @@Author           :  Jason Hempstead
 # @@Contact          :  jason@casjaysdev.pro
 # @@License          :  WTFPL
@@ -10,12 +10,13 @@
 # @@Created          :  Sunday, May 17, 2026 21:47 EDT
 # @@File             :  scripts/build-image.sh
 # @@Description      :  Build an Incus container image and publish it to the local SimpleStreams registry
-# @@Changelog        :  New script
+# @@Changelog        :  Add distrobuilder wrapper, SimpleStreams publisher, multi-arch/multi-type build support
 # @@TODO             :  Better documentation
 # @@Other            :
 # @@Resource         :  https://linuxcontainers.org/distrobuilder/
 # @@Terminal App     :  no
 # @@sudo/root        :  yes
+# @@Template         :  shell/bash
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # shellcheck disable=SC1001,SC1003,SC2001,SC2003,SC2016,SC2031,SC2090,SC2115,SC2120,SC2155,SC2199,SC2229,SC2317,SC2329
 # - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -23,23 +24,23 @@ set -euo pipefail
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # script variables
 APPNAME="${0##*/}"
-VERSION="202605172147-git"
+VERSION="202605172316-git"
 RUN_USER="${USER:-root}"
-SET_UID="$(id -u)"
-SCRIPT_SRC_DIR="$(dirname -- "$(realpath -- "$0")")"
+SET_UID="${UID}"
+SCRIPT_SRC_DIR="${BASH_SOURCE%/*}"
 BUILD_CWD="${PWD}"
 BUILD_EXIT_STATUS=0
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Define color variables
-PRINTF_SET_BLACK='\033[1;30m'
-PRINTF_SET_RED='\033[0;31m'
-PRINTF_SET_GREEN='\033[0;32m'
-PRINTF_SET_YELLOW='\033[1;33m'
-PRINTF_SET_BLUE='\033[1;34m'
-PRINTF_SET_PURPLE='\033[0;35m'
-PRINTF_SET_CYAN='\033[0;36m'
-PRINTF_SET_WHITE='\033[1;37m'
-PRINTF_SET_RESET='\033[0m'
+PRINTF_SET_BLACK='\e[1;30m'
+PRINTF_SET_RED='\e[0;31m'
+PRINTF_SET_GREEN='\e[0;32m'
+PRINTF_SET_YELLOW='\e[1;33m'
+PRINTF_SET_BLUE='\e[1;34m'
+PRINTF_SET_PURPLE='\e[0;35m'
+PRINTF_SET_CYAN='\e[0;36m'
+PRINTF_SET_WHITE='\e[1;37m'
+PRINTF_SET_RESET='\e[0m'
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Default configuration — all overridable via environment
 BUILD_ARCH="${BUILD_ARCH:-both}"
@@ -48,7 +49,8 @@ BUILD_SIMPLESTREAMS_PORT="${BUILD_SIMPLESTREAMS_PORT:-8088}"
 BUILD_TEMPLATE_DIR="${BUILD_TEMPLATE_DIR:-/var/lib/incus-simplestreams/templates}"
 BUILD_TEMPLATE_REPO="${BUILD_TEMPLATE_REPO:-https://raw.githubusercontent.com/lxc/lxc-ci/main/images}"
 BUILD_WORK_DIR="${BUILD_WORK_DIR:-${TMPDIR:-/tmp}/casjaysdev-incus-build}"
-BUILD_TYPE="${BUILD_TYPE:-container}"   # container, vm, or both
+# container, vm, or both
+BUILD_TYPE="${BUILD_TYPE:-container}"
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # script functions
 if [ -n "${NO_COLOR+x}" ] || [ "${SHOW_RAW:-}" = "true" ]; then
@@ -57,8 +59,8 @@ else
   __printf_color() { [ -t 1 ] && printf '%b%s%b\n' "${2:-$PRINTF_SET_RESET}" "$1" "$PRINTF_SET_RESET" || printf '%s\n' "$1"; }
 fi
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-__cmd_exists()      { command -v "$1" >/dev/null 2>&1; }
-__function_exists() { declare -f "$1" >/dev/null 2>&1; }
+__cmd_exists()      { command -v "$1" &>/dev/null; }
+__function_exists() { declare -F "$1" &>/dev/null; }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 __info()  { __printf_color "  [INFO]  $*" "$PRINTF_SET_CYAN"; }
 __ok()    { __printf_color "  [ OK ]  $*" "$PRINTF_SET_GREEN"; }
@@ -67,7 +69,7 @@ __error() { __printf_color "  [ERR ]  $*" "$PRINTF_SET_RED"; }
 __step()  { __printf_color "\n  >>>>  $*" "$PRINTF_SET_BLUE"; }
 __fatal() { __error "$*"; exit 1; }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-__show_help() {
+__help() {
   printf '%s\n' "
 Usage: ${APPNAME} [OPTIONS] <distro> <version> [packages]
 
@@ -117,7 +119,7 @@ Examples:
 "
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-__show_version() { printf '%s %s\n' "${APPNAME}" "${VERSION}"; }
+__version() { printf '%s %s\n' "${APPNAME}" "${VERSION}"; }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Map user-facing distro names to distrobuilder template names and arch labels
 # Output: sets __tmpl_name, __tmpl_variant, __arch_label_amd64, __arch_label_arm64
@@ -571,19 +573,14 @@ __reload_simplestreams() {
   fi
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-__cleanup_workdir() {
-  local work_dir="$1"
-  if [ -d "${work_dir}" ]; then
-    __info "Cleaning up build directory: ${work_dir}"
-    rm -rf "${work_dir}"
-  fi
+__cleanup() {
+  [ -n "${BUILD_WORK_DIR:-}" ] && [ -d "${BUILD_WORK_DIR}" ] && rm -rf "${BUILD_WORK_DIR}"
 }
-# - - - - - - - - - - - - - - - - - - - - - - - - -
-trap '' EXIT
+trap '__cleanup' EXIT ERR
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Parse arguments
-PARSED="$(getopt -o a:t:vh --long arch:,type:,version,help -n "${APPNAME}" -- "$@")" || {
-  __show_help; exit 1
+PARSED="$(getopt -o a:t:vh --long arch:,type:,version,help,no-color,debug -n "${APPNAME}" -- "$@")" || {
+  __help; exit 1
 }
 eval set -- "${PARSED}"
 while true; do
@@ -600,8 +597,10 @@ while true; do
         *) __fatal "--type must be one of: container, vm, both (got: $2)" ;;
       esac
       shift 2 ;;
-    -v|--version) __show_version; exit 0 ;;
-    -h|--help)    __show_help;    exit 0 ;;
+    -v|--version) __version;  exit 0 ;;
+    -h|--help)    __help;     exit 0 ;;
+    --no-color)   NO_COLOR=1; shift ;;
+    --debug)      BUILD_DEBUG=1; shift ;;
     --) shift; break ;;
     *)  __fatal "Unknown option: $1" ;;
   esac
@@ -615,8 +614,8 @@ DISTRO="${1:-}"
 VERSION="${2:-}"
 EXTRA_PKGS="${3:-}"
 
-[ -n "${DISTRO}" ]  || { __error "Missing required argument: distro"; __show_help; exit 1; }
-[ -n "${VERSION}" ] || { __error "Missing required argument: version"; __show_help; exit 1; }
+[ -n "${DISTRO}" ]  || { __error "Missing required argument: distro";   __help; exit 1; }
+[ -n "${VERSION}" ] || { __error "Missing required argument: version"; __help; exit 1; }
 
 __info "Distro   : ${DISTRO}"
 __info "Version  : ${VERSION}"
@@ -679,7 +678,6 @@ for arch in "${ARCHES[@]}"; do
 done
 
 __reload_simplestreams
-__cleanup_workdir "${BUILD_WORK_DIR}"
 
 __printf_color "\n  Build and publish complete." "$PRINTF_SET_GREEN"
 __printf_color "  List images: incus image list myregistry:" "$PRINTF_SET_CYAN"

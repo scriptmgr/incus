@@ -8,8 +8,10 @@ Install and configure [Incus](https://linuxcontainers.org/incus/) on any major L
 
 Run as root on the target machine. The script auto-detects the host distribution and handles everything.
 
+> **Security note:** review the script at the URL above before piping to bash, or use the clone method below.
+
 ```bash
-curl -LSsf https://raw.githubusercontent.com/scriptmgr/incus/main/install.sh \
+curl -q -LSsf https://raw.githubusercontent.com/scriptmgr/incus/main/install.sh \
   | bash
 ```
 

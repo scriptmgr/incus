@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-##@Version           :  202605172147-git
+##@Version           :  202605172316-git
 # @@Author           :  Jason Hempstead
 # @@Contact          :  jason@casjaysdev.pro
 # @@License          :  WTFPL
@@ -10,12 +10,13 @@
 # @@Created          :  Sunday, May 17, 2026 21:47 EDT
 # @@File             :  install.sh
 # @@Description      :  Install and configure Incus with SimpleStreams image registry and Nginx reverse proxy
-# @@Changelog        :  New script
+# @@Changelog        :  Add distro-aware Incus install, SimpleStreams registry, Nginx reverse proxy, GitHub script deployment
 # @@TODO             :  Better documentation
 # @@Other            :
 # @@Resource         :  https://linuxcontainers.org/incus/
 # @@Terminal App     :  no
 # @@sudo/root        :  yes
+# @@Template         :  shell/bash
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # shellcheck disable=SC1001,SC1003,SC2001,SC2003,SC2016,SC2031,SC2090,SC2115,SC2120,SC2155,SC2199,SC2229,SC2317,SC2329
 # - - - - - - - - - - - - - - - - - - - - - - - - -
@@ -23,23 +24,23 @@ set -euo pipefail
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # script variables
 APPNAME="${0##*/}"
-VERSION="202605172147-git"
+VERSION="202605172316-git"
 RUN_USER="${USER:-root}"
-SET_UID="$(id -u)"
-SCRIPT_SRC_DIR="$(dirname -- "$(realpath -- "$0")")"
+SET_UID="${UID}"
+SCRIPT_SRC_DIR="${BASH_SOURCE%/*}"
 INCUS_CWD="${PWD}"
 INCUS_EXIT_STATUS=0
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Define color variables
-PRINTF_SET_BLACK='\033[1;30m'
-PRINTF_SET_RED='\033[0;31m'
-PRINTF_SET_GREEN='\033[0;32m'
-PRINTF_SET_YELLOW='\033[1;33m'
-PRINTF_SET_BLUE='\033[1;34m'
-PRINTF_SET_PURPLE='\033[0;35m'
-PRINTF_SET_CYAN='\033[0;36m'
-PRINTF_SET_WHITE='\033[1;37m'
-PRINTF_SET_RESET='\033[0m'
+PRINTF_SET_BLACK='\e[1;30m'
+PRINTF_SET_RED='\e[0;31m'
+PRINTF_SET_GREEN='\e[0;32m'
+PRINTF_SET_YELLOW='\e[1;33m'
+PRINTF_SET_BLUE='\e[1;34m'
+PRINTF_SET_PURPLE='\e[0;35m'
+PRINTF_SET_CYAN='\e[0;36m'
+PRINTF_SET_WHITE='\e[1;37m'
+PRINTF_SET_RESET='\e[0m'
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Default configuration — all overridable via environment
 INCUS_ARCH="${INCUS_ARCH:-both}"
@@ -61,8 +62,8 @@ else
   __printf_color() { [ -t 1 ] && printf '%b%s%b\n' "${2:-$PRINTF_SET_RESET}" "$1" "$PRINTF_SET_RESET" || printf '%s\n' "$1"; }
 fi
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-__cmd_exists()      { command -v "$1" >/dev/null 2>&1; }
-__function_exists() { declare -f "$1" >/dev/null 2>&1; }
+__cmd_exists()      { command -v "$1" &>/dev/null; }
+__function_exists() { declare -F "$1" &>/dev/null; }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 __info()  { __printf_color "  [INFO]  $*" "$PRINTF_SET_CYAN"; }
 __ok()    { __printf_color "  [ OK ]  $*" "$PRINTF_SET_GREEN"; }
@@ -71,7 +72,7 @@ __error() { __printf_color "  [ERR ]  $*" "$PRINTF_SET_RED"; }
 __step()  { __printf_color "\n  >>>>  $*" "$PRINTF_SET_BLUE"; }
 __fatal() { __error "$*"; exit 1; }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-__show_help() {
+__help() {
   printf '%s\n' "
 Usage: ${APPNAME} [OPTIONS]
 
@@ -82,6 +83,8 @@ Options:
   -a, --arch ARCH     Architectures to support: amd64, arm64, both (default: both)
   -v, --version       Show version and exit
   -h, --help          Show this help and exit
+      --no-color      Disable color output
+      --debug         Enable debug output
 
 Environment variables (all optional — script uses sane defaults):
   INCUS_FQDN                  Registry hostname (default: hostname --fqdn)
@@ -112,7 +115,7 @@ Examples:
 "
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-__show_version() { printf '%s %s\n' "${APPNAME}" "${VERSION}"; }
+__version() { printf '%s %s\n' "${APPNAME}" "${VERSION}"; }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Distro detection
 __distro_id=""
@@ -733,13 +736,12 @@ __show_summary() {
   __printf_color "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n" "$PRINTF_SET_GREEN"
 }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-trap '' EXIT
+__cleanup() { :; }
+trap '__cleanup' EXIT ERR
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Parse arguments
-PARSED="$(getopt -o a:vh --long arch:,version,help -n "${APPNAME}" -- "$@")" || {
-  __show_help; exit 1
-}
-eval set -- "${PARSED}"
+_OPTS="$(getopt -o a:vh --long arch:,version,help,no-color,debug -n "${APPNAME}" -- "$@")" || { __help; exit 1; }
+eval set -- "${_OPTS}"
 while true; do
   case "$1" in
     -a|--arch)
@@ -748,8 +750,10 @@ while true; do
         *) __fatal "--arch must be one of: amd64, arm64, both (got: $2)" ;;
       esac
       shift 2 ;;
-    -v|--version) __show_version; exit 0 ;;
-    -h|--help)    __show_help;    exit 0 ;;
+    -v|--version) __version;  exit 0 ;;
+    -h|--help)    __help;     exit 0 ;;
+    --no-color)   NO_COLOR=1; shift ;;
+    --debug)      INCUS_DEBUG=1; shift ;;
     --) shift; break ;;
     *)  __fatal "Unknown option: $1" ;;
   esac
