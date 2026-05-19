@@ -363,8 +363,11 @@ __install_incus_simplestreams() {
         __zypper incus-simplestreams && installed=true
       fi ;;
     alpine)
-      if apk info incus-simplestreams >/dev/null 2>&1; then
-        __apk incus-simplestreams && installed=true
+      # incus-simplestreams is shipped in incus-utils (stable) or incus-feature-utils (feature)
+      if apk info incus-utils >/dev/null 2>&1; then
+        __apk incus-utils && installed=true
+      elif apk info incus-feature-utils >/dev/null 2>&1; then
+        __apk incus-feature-utils && installed=true
       fi ;;
   esac
 
