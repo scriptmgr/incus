@@ -59,7 +59,7 @@ PRINTF_SET_RESET='\e[0m'
 INCUS_ARCH="${INCUS_ARCH:-both}"
 INCUS_FQDN="${INCUS_FQDN:-$(hostname --fqdn 2>/dev/null || hostname -f 2>/dev/null || hostname)}"
 INCUS_SIMPLESTREAMS_PORT="${INCUS_SIMPLESTREAMS_PORT:-8088}"
-INCUS_SIMPLESTREAMS_DIR="${INCUS_SIMPLESTREAMS_DIR:-/var/lib/incus-simplestreams}"
+INCUS_SIMPLESTREAMS_DIR="${INCUS_SIMPLESTREAMS_DIR:-/var/lib/incus/simplestreams}"
 INCUS_SIMPLESTREAMS_USER="${INCUS_SIMPLESTREAMS_USER:-incus-streams}"
 INCUS_NGINX_CONF_DIR="${INCUS_NGINX_CONF_DIR:-/etc/nginx/vhosts.d}"
 INCUS_NGINX_LOG_DIR="${INCUS_NGINX_LOG_DIR:-/var/log/nginx}"
@@ -102,7 +102,7 @@ Options:
 Environment variables (all optional — script uses sane defaults):
   INCUS_FQDN                  Registry hostname (default: hostname --fqdn)
   INCUS_SIMPLESTREAMS_PORT    Backend HTTP port (default: 8088)
-  INCUS_SIMPLESTREAMS_DIR     Image storage root (default: /var/lib/incus-simplestreams)
+  INCUS_SIMPLESTREAMS_DIR     Image storage root (default: /var/lib/incus/simplestreams)
   INCUS_SIMPLESTREAMS_USER    Service user (default: incus-streams)
   INCUS_NGINX_CONF_DIR        Nginx vhost config dir (default: /etc/nginx/vhosts.d)
   INCUS_NGINX_LOG_DIR         Nginx log dir (default: /var/log/nginx)
