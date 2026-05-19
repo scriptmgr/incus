@@ -95,10 +95,11 @@ Environment variables:
   BUILD_TYPE                Default image type (container/vm/both)
 
 Supported distributions:
-  alpine        3.18, 3.19, 3.20, 3.21, edge
+  alpine        3.18, 3.19, 3.20, 3.21, 3.22, 3.23, edge
+  almalinux     8, 9, 10
   arch          current
   centos        9-stream
-  debian        bullseye, bookworm, trixie, sid
+  debian        11 (bullseye), 12 (bookworm), 13 (trixie), sid
   fedora        39, 40, 41, 42
   gentoo        current
   kali          current (rolling)
@@ -122,19 +123,21 @@ Examples:
 __version() { printf '%s %s\n' "${APPNAME}" "${VERSION}"; }
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Map user-facing distro names to distrobuilder template names and arch labels
-# Output: sets __tmpl_name, __tmpl_variant, __arch_label_amd64, __arch_label_arm64
+# Output: sets __tmpl_name, __tmpl_variant, __arch_label_amd64, __arch_label_arm64, __release
+# __release is set only when the version must be translated to a codename for distrobuilder
 __map_distro() {
   local distro="$1" version="$2"
   __tmpl_name=""
   __tmpl_variant=""
   __arch_label_amd64="amd64"
   __arch_label_arm64="arm64"
+  __release=""
 
   case "${distro}" in
     alpine)
       __tmpl_name="alpine"
       __arch_label_amd64="amd64"
-      __arch_label_arm64="arm64"  # distrobuilder normalizes this
+      __arch_label_arm64="arm64"
       ;;
     arch|archlinux)
       __tmpl_name="archlinux"
@@ -145,6 +148,16 @@ __map_distro() {
       ;;
     debian)
       __tmpl_name="debian"
+      # Map numeric versions to codenames for distrobuilder
+      case "${version}" in
+        10|buster)   __release="buster"   ;;
+        11|bullseye) __release="bullseye" ;;
+        12|bookworm) __release="bookworm" ;;
+        13|trixie)   __release="trixie"   ;;
+        14|forky)    __release="forky"    ;;
+        sid)         __release="sid"      ;;
+        *) __release="${version}" ;;
+      esac
       ;;
     fedora)
       __tmpl_name="fedora"
@@ -613,23 +626,25 @@ done
 
 # Positional args
 DISTRO="${1:-}"
-VERSION="${2:-}"
+DISTRO_VERSION="${2:-}"
 EXTRA_PKGS="${3:-}"
 
-[ -n "${DISTRO}" ]  || { __error "Missing required argument: distro";   __help; exit 1; }
-[ -n "${VERSION}" ] || { __error "Missing required argument: version"; __help; exit 1; }
-
-__info "Distro   : ${DISTRO}"
-__info "Version  : ${VERSION}"
-__info "Packages : ${EXTRA_PKGS:-<none>}"
-__info "Arch     : ${BUILD_ARCH}"
-__info "Type     : ${BUILD_TYPE}"
+[ -n "${DISTRO}" ]         || { __error "Missing required argument: distro";   __help; exit 1; }
+[ -n "${DISTRO_VERSION}" ] || { __error "Missing required argument: version";  __help; exit 1; }
 
 __install_distrobuilder
 
-# Map distro to template name and arch labels
-__map_distro "${DISTRO}" "${VERSION}"
+# Map distro to template name, arch labels, and (if needed) codename
+__map_distro "${DISTRO}" "${DISTRO_VERSION}"
 TMPL_NAME="${__tmpl_name}"
+# Use the mapped codename if set, otherwise use the user-supplied version
+BUILD_RELEASE="${__release:-${DISTRO_VERSION}}"
+
+__info "Distro   : ${DISTRO}"
+__info "Version  : ${DISTRO_VERSION}${__release:+ (→ ${BUILD_RELEASE})}"
+__info "Packages : ${EXTRA_PKGS:-<none>}"
+__info "Arch     : ${BUILD_ARCH}"
+__info "Type     : ${BUILD_TYPE}"
 
 # Fetch/cache the distrobuilder YAML template
 TMPL_FILE="$(__fetch_template "${DISTRO}" "${TMPL_NAME}")"
@@ -668,14 +683,14 @@ for arch in "${ARCHES[@]}"; do
   esac
 
   for img_type in "${TYPES[@]}"; do
-    build_out_dir="${BUILD_WORK_DIR}/output/${DISTRO}/${VERSION}"
+    build_out_dir="${BUILD_WORK_DIR}/output/${DISTRO}/${BUILD_RELEASE}"
     mkdir -p "${build_out_dir}"
 
     built_dir="$(__build_for_arch \
-      "${TMPL_FILE}" "${DISTRO}" "${VERSION}" \
+      "${TMPL_FILE}" "${DISTRO}" "${BUILD_RELEASE}" \
       "${arch}" "${arch_label}" "${img_type}" "${build_out_dir}")"
 
-    __publish_image "${built_dir}" "${DISTRO}" "${VERSION}" "${arch}" "${img_type}"
+    __publish_image "${built_dir}" "${DISTRO}" "${BUILD_RELEASE}" "${arch}" "${img_type}"
   done
 done
 

@@ -20,6 +20,19 @@
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # shellcheck disable=SC1001,SC1003,SC2001,SC2003,SC2016,SC2031,SC2090,SC2115,SC2120,SC2155,SC2199,SC2229,SC2317,SC2329
 # - - - - - - - - - - - - - - - - - - - - - - - - -
+# Guard: Alpine ships ash; install bash and re-exec if needed
+if [ -z "${BASH_VERSION:-}" ]; then
+  if [ -f /etc/alpine-release ] && ! command -v bash >/dev/null 2>&1; then
+    apk update -q 2>/dev/null || true
+    apk add --no-progress bash 2>/dev/null || true
+  fi
+  if command -v bash >/dev/null 2>&1; then
+    exec bash "$0" "$@"
+  fi
+  printf 'ERROR: bash is required. Install bash and re-run: bash %s\n' "$0" >&2
+  exit 1
+fi
+# - - - - - - - - - - - - - - - - - - - - - - - - -
 set -euo pipefail
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # script variables
@@ -204,9 +217,9 @@ __install_incus_fedora() {
     __ok "incus already installed ($(incus --version 2>/dev/null || echo '?'))"
     return 0
   fi
-  __info "Enabling ganto/incus COPR"
+  __info "Enabling neelc/incus COPR"
   __dnf install dnf-plugins-core
-  dnf copr enable -y ganto/incus
+  dnf copr enable -y neelc/incus
   __dnf install incus incus-tools
   __ok "incus installed"
 }
@@ -217,14 +230,24 @@ __install_incus_rhel() {
     return 0
   fi
   local major="${__distro_version%%.*}"
-  __info "Installing EPEL and enabling ganto/incus COPR"
+  __info "Installing EPEL and enabling neelc/incus COPR"
   __dnf install dnf-plugins-core
   if ! rpm -q epel-release >/dev/null 2>&1; then
     __dnf install \
       "https://dl.fedoraproject.org/pub/epel/epel-release-latest-${major}.noarch.rpm" \
       2>/dev/null || __dnf install epel-release || true
   fi
-  dnf copr enable -y ganto/incus
+  if [ "${major}" -ge 10 ]; then
+    # dnf copr enable does not support el10 for neelc/incus; fetch repo file directly
+    __info "Adding neelc/incus repo for el${major}"
+    curl -q -LSsf \
+      "https://copr.fedorainfracloud.org/coprs/neelc/incus/repo/rhel+epel-${major}/neelc-incus-rhel+epel-${major}.repo" \
+      -o "/etc/yum.repos.d/neelc-incus-rhel+epel-${major}.repo"
+  else
+    dnf copr enable -y neelc/incus
+    # CRB provides build-time deps for el9
+    dnf config-manager --enable crb 2>/dev/null || true
+  fi
   __dnf install incus incus-tools
   __ok "incus installed"
 }
@@ -272,9 +295,10 @@ __install_incus_alpine() {
       >> /etc/apk/repositories
     apk update -q
   fi
-  __apk incus incus-openrc
+  __apk curl incus incus-client incus-openrc
   __ok "incus installed"
 }
+
 
 __install_incus() {
   __step "Installing Incus"
@@ -288,13 +312,13 @@ __configure_incus() {
     systemctl enable --now incus incus-startup 2>/dev/null \
       || systemctl enable --now incus 2>/dev/null || true
   elif __cmd_exists rc-service; then
-    rc-update add incus default 2>/dev/null || true
-    rc-service incus start 2>/dev/null || true
+    rc-update add incusd default 2>/dev/null || true
+    rc-service incusd start 2>/dev/null || true
   fi
 
-  # Wait for socket (up to 20s)
+  # Wait for socket (up to 45s — OpenRC daemons can be slower to initialize)
   local i=0
-  while [ "${i}" -lt 20 ]; do
+  while [ "${i}" -lt 45 ]; do
     incus info >/dev/null 2>&1 && break
     sleep 1; i=$((i + 1))
   done
@@ -354,19 +378,18 @@ __install_incus_simplestreams() {
   local host_arch
   host_arch="$(uname -m)"
   case "${host_arch}" in
-    x86_64)  host_arch="amd64" ;;
-    aarch64) host_arch="arm64" ;;
+    x86_64|aarch64) ;;
     *) __fatal "Unsupported host architecture: ${host_arch}" ;;
   esac
 
   local api_url="https://api.github.com/repos/lxc/incus/releases/latest"
   local bin_url
-  bin_url="$(curl -fsSL "${api_url}" \
-    | grep -oE '"browser_download_url": *"[^"]*incus-simplestreams[^"]*linux[_-]'"${host_arch}"'[^"]*"' \
+  bin_url="$(curl -q -LSsf --max-time 30 "${api_url}" \
+    | grep -oE '"browser_download_url": *"[^"]*incus-simplestreams[^"]*[._-]'"${host_arch}"'"' \
     | head -1 | cut -d'"' -f4)"
 
   if [ -n "${bin_url}" ]; then
-    curl -fsSL "${bin_url}" -o /usr/local/bin/incus-simplestreams
+    curl -q -LSsf --max-time 120 "${bin_url}" -o /usr/local/bin/incus-simplestreams
     chmod 755 /usr/local/bin/incus-simplestreams
     __ok "incus-simplestreams installed from GitHub release"
     return 0
@@ -498,6 +521,8 @@ depend() {
 }
 EORC
       chmod +x /etc/init.d/incus-simplestreams
+      touch /var/log/incus-simplestreams.log
+      chown "${INCUS_SIMPLESTREAMS_USER}" /var/log/incus-simplestreams.log 2>/dev/null || true
       rc-update add incus-simplestreams default
       rc-service incus-simplestreams start
     else
@@ -533,11 +558,21 @@ __configure_nginx() {
 
   # Patch main nginx.conf to include vhosts.d if not already included
   local nginx_conf="/etc/nginx/nginx.conf"
-  if [ -f "${nginx_conf}" ] && ! grep -q "vhosts.d" "${nginx_conf}"; then
-    __info "Adding vhosts.d include to nginx.conf"
-    # Insert include just before the closing brace of the http block
-    sed -i 's|^}$|    include '"${INCUS_NGINX_CONF_DIR}"'/*.conf;\n}|' "${nginx_conf}" \
-      || __warn "Could not auto-patch nginx.conf — add manually: include ${INCUS_NGINX_CONF_DIR}/*.conf;"
+  if [ -f "${nginx_conf}" ] && ! grep -qF "${INCUS_NGINX_CONF_DIR}" "${nginx_conf}"; then
+    __info "Adding $(basename "${INCUS_NGINX_CONF_DIR}") include to nginx.conf"
+    # Replace only the LAST standalone } (which closes the http {} block).
+    # Using tac/sed/tac so only the first } in the reversed file is touched.
+    # Insert include before the last standalone } (closes the http block).
+    # awk tracks the last ^}$ line, then emits the include before it.
+    if awk -v inc="    include ${INCUS_NGINX_CONF_DIR}/*.conf;" \
+        '/^}$/ { last=NR; lines[NR]=$0; next } { lines[NR]=$0 }
+         END { for(i=1;i<=NR;i++){ if(i==last) print inc; print lines[i] } }' \
+        "${nginx_conf}" > "${nginx_conf}.new" \
+        && mv "${nginx_conf}.new" "${nginx_conf}"; then
+      : # patched successfully
+    else
+      __warn "Could not auto-patch nginx.conf — add manually: include ${INCUS_NGINX_CONF_DIR}/*.conf;"
+    fi
   fi
 
   local conf="${INCUS_NGINX_CONF_DIR}/${INCUS_FQDN}.conf"
@@ -643,7 +678,7 @@ EONGINX
     fi
     __ok "Nginx reloaded"
   else
-    nginx -t
+    nginx -t 2>&1 || true
     __warn "nginx config test failed — fix errors then: nginx -s reload"
   fi
 }
