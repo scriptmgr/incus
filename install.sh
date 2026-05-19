@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck shell=bash
 # - - - - - - - - - - - - - - - - - - - - - - - - -
-##@Version           :  202605172316-git
+##@Version           :  202605191051-git
 # @@Author           :  Jason Hempstead
-# @@Contact          :  jason@casjaysdev.pro
+# @@Contact          :  git-admin@casjaysdev.pro
 # @@License          :  WTFPL
 # @@ReadME           :  install.sh --help
 # @@Copyright        :  Copyright: (c) 2026 Jason Hempstead, Casjays Developments
@@ -37,20 +37,18 @@ set -euo pipefail
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # script variables
 APPNAME="${0##*/}"
-VERSION="202605172316-git"
+VERSION="202605191051-git"
+# shellcheck disable=SC2034
 RUN_USER="${USER:-root}"
 SET_UID="${UID}"
 SCRIPT_SRC_DIR="${BASH_SOURCE%/*}"
-INCUS_CWD="${PWD}"
 INCUS_EXIT_STATUS=0
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Define color variables
-PRINTF_SET_BLACK='\e[1;30m'
 PRINTF_SET_RED='\e[0;31m'
 PRINTF_SET_GREEN='\e[0;32m'
 PRINTF_SET_YELLOW='\e[1;33m'
 PRINTF_SET_BLUE='\e[1;34m'
-PRINTF_SET_PURPLE='\e[0;35m'
 PRINTF_SET_CYAN='\e[0;36m'
 PRINTF_SET_WHITE='\e[1;37m'
 PRINTF_SET_RESET='\e[0m'
@@ -114,8 +112,8 @@ Environment variables (all optional — script uses sane defaults):
 
 Supported distributions:
   Debian, Ubuntu, and derivatives  (zabbly stable repo)
-  Fedora                           (ganto/incus COPR)
-  RHEL, CentOS, Rocky, AlmaLinux  (EPEL + ganto/incus COPR)
+  Fedora                           (neelc/incus COPR)
+  RHEL, CentOS, Rocky, AlmaLinux  (EPEL + neelc/incus COPR)
   Arch Linux and derivatives       (extra repo)
   openSUSE Tumbleweed / Leap       (OBS home:ganto:incus)
   Alpine Linux                     (community repo)
@@ -199,6 +197,7 @@ __install_incus_debian() {
   local codename="${__distro_codename}"
   # Derivatives may not set VERSION_CODENAME — try fallbacks
   if [ -z "${codename}" ]; then
+    # shellcheck disable=SC1091
     codename="$(. /etc/upstream-release/lsb-release 2>/dev/null \
                 && echo "${DISTRIB_CODENAME:-}" || true)"
     [ -z "${codename}" ] && codename="$(lsb_release -sc 2>/dev/null || true)"
@@ -288,7 +287,7 @@ __install_incus_alpine() {
     return 0
   fi
   # Ensure community repo is present
-  if ! grep -q '^[^#].*community' /etc/apk/repositories 2>/dev/null; then
+  if ! grep -q -- '^[^#].*community' /etc/apk/repositories 2>/dev/null; then
     local ver
     ver="$(cut -d. -f1-2 /etc/alpine-release 2>/dev/null)"
     printf 'https://dl-cdn.alpinelinux.org/alpine/v%s/community\n' "${ver}" \
@@ -325,7 +324,7 @@ __configure_incus() {
   incus info >/dev/null 2>&1 || __fatal "Incus daemon not responding after start"
 
   # Idempotent init — skip if storage pools already exist
-  if incus storage list 2>/dev/null | grep -qE '^\| [a-zA-Z]'; then
+  if incus storage list 2>/dev/null | grep -qE -- '^\| [a-zA-Z]'; then
     __ok "Incus already initialized"
     return 0
   fi
@@ -355,7 +354,7 @@ __install_incus_simplestreams() {
         __dnf install incus-simplestreams && installed=true
       fi ;;
     arch)
-      if pacman -Ss '^incus-simplestreams$' 2>/dev/null | grep -q incus-simplestreams; then
+      if pacman -Ss '^incus-simplestreams$' 2>/dev/null | grep -q -- 'incus-simplestreams'; then
         __pacman incus-simplestreams && installed=true
       fi ;;
     suse)
@@ -388,7 +387,7 @@ __install_incus_simplestreams() {
   local api_url="https://api.github.com/repos/lxc/incus/releases/latest"
   local bin_url
   bin_url="$(curl -q -LSsf --max-time 30 "${api_url}" \
-    | grep -oE '"browser_download_url": *"[^"]*incus-simplestreams[^"]*[._-]'"${host_arch}"'"' \
+    | grep -oE -- '"browser_download_url": *"[^"]*incus-simplestreams[^"]*[._-]'"${host_arch}"'"' \
     | head -1 | cut -d'"' -f4)"
 
   if [ -n "${bin_url}" ]; then
@@ -561,7 +560,7 @@ __configure_nginx() {
 
   # Patch main nginx.conf to include vhosts.d if not already included
   local nginx_conf="/etc/nginx/nginx.conf"
-  if [ -f "${nginx_conf}" ] && ! grep -qF "${INCUS_NGINX_CONF_DIR}" "${nginx_conf}"; then
+  if [ -f "${nginx_conf}" ] && ! grep -qF -- "${INCUS_NGINX_CONF_DIR}" "${nginx_conf}"; then
     __info "Adding $(basename "${INCUS_NGINX_CONF_DIR}") include to nginx.conf"
     # Replace only the LAST standalone } (which closes the http {} block).
     # Using tac/sed/tac so only the first } in the reversed file is touched.
@@ -572,7 +571,8 @@ __configure_nginx() {
          END { for(i=1;i<=NR;i++){ if(i==last) print inc; print lines[i] } }' \
         "${nginx_conf}" > "${nginx_conf}.new" \
         && mv "${nginx_conf}.new" "${nginx_conf}"; then
-      : # patched successfully
+      # patched successfully
+      :
     else
       __warn "Could not auto-patch nginx.conf — add manually: include ${INCUS_NGINX_CONF_DIR}/*.conf;"
     fi
@@ -796,6 +796,8 @@ while true; do
     *)  __fatal "Unknown option: $1" ;;
   esac
 done
+# Enable trace output when --debug was passed
+[[ "${INCUS_DEBUG:-0}" == "1" ]] && set -x
 # - - - - - - - - - - - - - - - - - - - - - - - - -
 # Main application
 [ "${SET_UID}" -eq 0 ] || __fatal "Must be run as root"
